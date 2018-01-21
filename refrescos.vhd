@@ -1,5 +1,7 @@
 ----------------------------------------------------------------------------------
- 
+ -- ÁLVARO MARTÍNEZ NOTARIO
+ -- DANIEL MARTÍNEZ MÉNDEZ
+ -- TERESA RODRÍGUEZ
 ----------------------------------------------------------------------------------
 
 
@@ -17,11 +19,13 @@ entity refrescos is
           ACEPTAR       : in std_logic;
           SEL_REFRESCO  : in std_logic_vector(3 downto 0);
           SENSOR_MONEDA : in std_logic_vector(5 downto 0);
+          SENSOR_BEBIDA_LLENA : in std_logic;
     --SALIDAS
           SAL_REFRESCO  : out std_logic_vector(3 downto 0);
           LED_REFRESCO  : out std_logic_vector(3 downto 0);
           SAL_DINERO    : out std_logic;
-          SITUACION     : out std_logic_vector(3 downto 0)
+          SITUACION     : out std_logic_vector(3 downto 0);
+          CUENTA_DINERO : out integer range 0 to 500
           );
     --SITUACIÓN SE REFIERE A 1) LA MAQUINA NOS DICE
     --SU ESTADO       
@@ -29,103 +33,76 @@ end refrescos;
 
 architecture Behavioral of refrescos is
     --DECLARAMOS AQUÍ LAS SEÑALES INTERNAS
-type ESTADO_MAQUINA is (INICIO, S_REFR, PIDE_DINERO ,SERVIR);
+type ESTADO_MAQUINA is (INICIO, S_REFR, SELECCIONANDO, PIDE_DINERO ,SERVIR);
 signal PS, NS: ESTADO_MAQUINA; --PRESENT STATE Y NEW STATE
 subtype saldo is integer range 0 to 500;
-signal dinero : saldo;
+signal dinero : saldo := 0;
 constant PRECIO : integer := 150; --Hay que meter el dinero justo
-signal ref_elegido : std_logic_vector(3 downto 0) := "0000";
-signal ref_pagado  : std_logic;
-signal servido     : std_logic;     --señal interna que sabe si ha salido o no el refresco
-signal sirviendo_time_count : integer range 0 to 60 := 0;
-signal d_devuelto : saldo;
+signal last_coin : std_logic; -- Guarda estado de si ha habido flanco de subida de la moneda
+signal ref_pedido : std_logic_vector(3 downto 0);
+signal servido : std_logic := '0';
 
 begin
     --DIVIDIMOS EN BLOQUES PARA QUE SE
-    --VEA BIEN LA SEPARACIÓN ENTRE BLOQUES
+    --VEA BIEN LA SEPARACIÓN
      
-    --------------------------------
-    --------------------------------
-    --------------------------------
-REFRESCOS_SEL : block is
-begin
-    
-    seleccion : process(SEL_REFRESCO, CANCELAR) is 
-    begin
-        if CANCELAR = '1' then ref_elegido <="0000";
-        elsif ref_elegido = "0000" and SEL_REFRESCO'event and PS = S_REFR then 
-            ref_elegido <= SEL_REFRESCO;
-            LED_REFRESCO <= SEL_REFRESCO; --SI NO SE HABIA SELECCIONADO, SE PUEDE SELECCIONAR
-        end if;        
-    end process seleccion;
-    
-    check_servido : process (CLK) is
-    begin
-        if rising_edge(CLK) and PS = SERVIR then sirviendo_time_count <= sirviendo_time_count + 1;
-        elsif (sirviendo_time_count = 10) then 
-            servido <= '1';
-            sirviendo_time_count <= 0;
-        end if;
-    end process;
-    
-    salida : process (PS) is
-    begin
-        if PS = SERVIR then SAL_REFRESCO<=ref_elegido;
-        elsif PS = INICIO then ref_elegido <= "0000"; 
-        end if;
-    end process salida;
-end block REFRESCOS_SEL; 
 --------------------------------
 --------------------------------
 --------------------------------
 MAQUINA_CAFE : block is
-begin
-
-
+begin    
     state_register : process(CANCELAR, CLK) is
     begin
         if CANCELAR = '1' then PS <= INICIO;
-        elsif rising_edge(CLK) then PS <= NS;
+        elsif rising_edge(CLK) then 
+        PS <= NS;
         end if;
     end process state_register;
     
-    next_state: process(PS, CANCELAR, ACEPTAR, SEL_REFRESCO, SENSOR_MONEDA) is
+    next_state: process(PS, servido, ACEPTAR, SEL_REFRESCO, SENSOR_MONEDA) is
     begin
-    NS <= PS; --CONDICION DE MANTENIMIENTO DE ESTADO SI NO SE
-              --CUMPLE NINGUN CASO
+
         case PS is
             when INICIO =>
                 if ACEPTAR = '1' then NS<=S_REFR;
                 end if;
             when S_REFR =>
-                if SEL_REFRESCO'event then NS <= PIDE_DINERO;
+                if SEL_REFRESCO'event then 
+                NS <= SELECCIONANDO;                
                 end if;
+            when SELECCIONANDO =>
+                NS <= PIDE_DINERO;
             when PIDE_DINERO =>
-                if ref_pagado = '1' then NS <= SERVIR;
+                if dinero>=PRECIO then NS <= SERVIR;
                 end if;
             when SERVIR =>
-                if servido = '1' then NS <= INICIO;
+                if servido = '1' then 
+                NS <= INICIO;
                 end if;
             end case;
     end process next_state;
     ----------------------
-    salidas : process(PS) is
+    salidas : process(PS, CANCELAR) is
     begin
         if CANCELAR = '1' then SAL_DINERO <= '1';
         else SAL_DINERO <= '0';
         end if;
         case PS is
             when INICIO =>
-                ref_pagado <= '0';
+                LED_REFRESCO <= "0000";
+                SAL_REFRESCO <= "0000";        
                 SITUACION <= "1000";
-            when S_REFR =>
+            when S_REFR =>                
                 SITUACION <= "0100";
+            when SELECCIONANDO =>
+                LED_REFRESCO <= SEL_REFRESCO;
+                ref_pedido <= SEL_REFRESCO; 
             when PIDE_DINERO =>
                 SITUACION <= "0010";
-                if dinero > PRECIO then
-                ref_pagado <= '1';
-                end if;
             when SERVIR =>
+                SAL_REFRESCO <= ref_pedido;
+                if(dinero>150) then SAL_DINERO <='1';
+                end if;
                 SITUACION <= "0001";
             end case;
     end process salidas;
@@ -134,25 +111,52 @@ end block MAQUINA_CAFE;
 --------------------------------
 --------------------------------
 --------------------------------
+SENSOR_BEBIDA : block is
+begin
+    sincronia : process(CLK) is 
+    begin
+        if rising_edge(CLK) then 
+            if SENSOR_BEBIDA_LLENA = '1' then
+                servido <= '1';          
+            elsif servido = '1' then
+                servido <= '0';
+            end if;
+        end if;
+    end process sincronia;
+end block SENSOR_BEBIDA;
+--------------------------------
+--------------------------------
+--------------------------------
 MONEDAS : block is --tIENE EL CONTADOR DENTRO
 begin
 
-    cuenta: process(SENSOR_MONEDA) is
+    cuenta: process(CLK) is
     begin
-        case SENSOR_MONEDA is
-            when "000001" => 
-                dinero <= dinero + 5;
-            when "000010" => 
-                    dinero <= dinero + 10;
-            when "000100" => 
-                    dinero <= dinero + 20;
-            when "001000" => 
-                    dinero <= dinero + 50;
-            when "010000" => 
-                    dinero <= dinero + 100;
-            when "100000" => 
-                    dinero <= dinero + 200;
-        end case;
+        if rising_edge(CLK) then
+            if(SENSOR_MONEDA /= "000000") then last_coin <= '1';
+            else last_coin <= '0';
+            end if;
+            if(last_coin = '0') then
+            case SENSOR_MONEDA is
+                when "000001" => 
+                    dinero <= dinero + 5;
+                when "000010" => 
+                        dinero <= dinero + 10;
+                when "000100" => 
+                        dinero <= dinero + 20;
+                when "001000" => 
+                        dinero <= dinero + 50;
+                when "010000" => 
+                        dinero <= dinero + 100;
+                when "100000" => 
+                        dinero <= dinero + 200;
+                when others   => dinero <=dinero;
+            end case;
+            end if;
+            CUENTA_DINERO <= dinero;
+            if PS = INICIO then dinero <= 0;
+            end if;
+        end if;
     end process cuenta;
     end block MONEDAS;
 
